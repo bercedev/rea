@@ -3,7 +3,8 @@ import { parseEvidence, type Evidence } from "../domain/evidence.js";
 import type { JsonValue } from "../domain/jsonValue.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import type { AnalysisError } from "../domain/analysisErrorBase.js";
-import type { Result } from "../domain/result.js";
+import { err, type Result } from "../domain/result.js";
+import { EvidenceFileError } from "../domain/evidenceErrors.js";
 import { AnalysisInputError } from "../domain/analysisErrorCore.js";
 import { createEvidenceBundle } from "../domain/evidenceBundle.js";
 import { writeEvidenceBundle } from "../application/EvidenceBundleFiles.js";
@@ -56,6 +57,21 @@ export const cliEvidenceDeliveryInputError = (
         },
       ])
     : undefined;
+
+/**
+ * CLI delivery never overwrites, so an existing destination can only be fixed
+ * by choosing another --evidence_output; the shared "allow overwrite" advice
+ * belongs to MCP exports that accept overwrite.
+ */
+const cliEvidenceWriteError = <E extends AnalysisError>(error: E) =>
+  error instanceof EvidenceFileError && error.reason === "exists"
+    ? new EvidenceFileError("write", "exists", {
+        ...(error.path === undefined ? {} : { path: error.path }),
+        cause: error,
+        userMessage:
+          "Evidence file already exists, and this command never overwrites. Choose another --evidence_output path.",
+      })
+    : error;
 
 /** One-shot delivery owns report publication; analysis keeps its own cleanup owner. */
 export const deliverCliAnalysisEvidence = async (
@@ -131,9 +147,10 @@ export const publishCliAnalysisEvidence = async (
         signal,
       );
       if (!written.ok) {
-        if (written.error.partialObservation === undefined)
-          written.error.retainPartialObservation(complete);
-        return written;
+        const error = cliEvidenceWriteError(written.error);
+        if (error.partialObservation === undefined)
+          error.retainPartialObservation(complete);
+        return err(error);
       }
       receipt = written.value;
       return detail === "summary"
